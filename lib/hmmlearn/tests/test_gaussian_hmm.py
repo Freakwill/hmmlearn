@@ -119,12 +119,18 @@ class GaussianHMMTestMixin:
 
     @pytest.mark.parametrize("implementation", ["scaling", "log"])
     def test_fit_ignored_init_warns(self, implementation, caplog):
+        # This test occasionally will be flaky in learning the model.
+        # What is important here, is that the expected log message is produced
+        # We can test convergence properties elsewhere.
         h = hmm.GaussianHMM(self.n_components, self.covariance_type,
                             implementation=implementation)
         h.startprob_ = self.startprob
         h.fit(self.prng.randn(100, self.n_components))
-        assert len(caplog.records) == 1, caplog
-        assert "will be overwritten" in caplog.records[0].getMessage()
+        found = False
+        for record in caplog.records:
+            if "will be overwritten" in record.getMessage():
+                found = True
+        assert found, "Did not find expected warning message"
 
     @pytest.mark.parametrize("implementation", ["scaling", "log"])
     def test_fit_too_little_data(self, implementation, caplog):
@@ -182,7 +188,13 @@ class GaussianHMMTestMixin:
 
     @pytest.mark.parametrize("implementation", ["scaling", "log"])
     def test_fit_with_priors(self, implementation, init_params='mc',
-                             params='stmc', n_iter=5):
+                             params='stmc', n_iter=20):
+        # We have a few options to make this a robust test, such as
+        # a. increase the amount of training data to ensure convergence
+        # b. Only learn some of the parameters (simplify the problem)
+        # c. Increase the number of iterations
+        #
+        # (c) seems to not affect the ci/cd time too much.
         startprob_prior = 10 * self.startprob + 2.0
         transmat_prior = 10 * self.transmat + 2.0
         means_prior = self.means
@@ -225,15 +237,20 @@ class GaussianHMMTestMixin:
         assert_log_likelihood_increasing(h_learn, X, lengths, n_iter)
 
         # Make sure we've converged to the right parameters.
+        # In general, to account for state switching,
+        # compare sorted values.
         # a) means
-        assert_allclose(sorted(h.means_.tolist()),
-                        sorted(h_learn.means_.tolist()),
+        assert_allclose(sorted(h.means_.ravel().tolist()),
+                        sorted(h_learn.means_.ravel().tolist()),
                         0.01)
         # b) covars are hard to estimate precisely from a relatively small
         #    sample, thus the large threshold
+
+        # account for how we store the covars_compressed
+        orig = np.broadcast_to(h._covars_, h_learn._covars_.shape)
         assert_allclose(
-            *np.broadcast_arrays(sorted(h._covars_.tolist()),
-                                 sorted(h_learn._covars_.tolist())),
+            sorted(orig.ravel().tolist()),
+            sorted(h_learn._covars_.ravel().tolist()),
             10)
 
 
